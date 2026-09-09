@@ -3,6 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
+import random
+from datetime import datetime, timedelta
+import uuid
 
 app = FastAPI(title="Factory Inventory Management System")
 
@@ -119,6 +122,24 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockingOrderItem(BaseModel):
+    sku: str
+    name: str
+    quantity: int
+    unit_cost: float
+
+class RestockingOrderRequest(BaseModel):
+    items: List[RestockingOrderItem]
+    budget: float
+
+class RestockingOrderResponse(BaseModel):
+    order_id: str
+    order_number: str
+    total_items: int
+    total_cost: float
+    delivery_lead_time_days: int
+    message: str
 
 # API endpoints
 @app.get("/")
@@ -272,6 +293,61 @@ def get_quarterly_reports():
     # Sort by quarter
     result.sort(key=lambda x: x['quarter'])
     return result
+
+@app.post("/api/restocking/orders", response_model=RestockingOrderResponse)
+def submit_restocking_order(request: RestockingOrderRequest):
+    """Submit a restocking order with items and budget"""
+    total_cost = sum(item.quantity * item.unit_cost for item in request.items)
+
+    if total_cost > request.budget:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order total (${total_cost:.2f}) exceeds budget (${request.budget:.2f})"
+        )
+
+    # Generate lead time (5-30 days)
+    lead_time_days = random.randint(5, 30)
+
+    # Create order
+    order_id = str(uuid.uuid4())
+    order_number = f"RST-{len(orders) + 1:04d}"
+    today = datetime.now().isoformat()
+    delivery_date = (datetime.now() + timedelta(days=lead_time_days)).isoformat()
+
+    # Create order items in the expected format
+    order_items = []
+    for item in request.items:
+        order_items.append({
+            "sku": item.sku,
+            "name": item.name,
+            "quantity": item.quantity,
+            "unit_price": item.unit_cost
+        })
+
+    new_order = {
+        "id": order_id,
+        "order_number": order_number,
+        "customer": "Internal Restocking",
+        "items": order_items,
+        "status": "Processing",
+        "warehouse": "Multiple",
+        "category": "Restocking",
+        "order_date": today,
+        "expected_delivery": delivery_date,
+        "total_value": total_cost,
+        "actual_delivery": None
+    }
+
+    orders.append(new_order)
+
+    return RestockingOrderResponse(
+        order_id=order_id,
+        order_number=order_number,
+        total_items=sum(item.quantity for item in request.items),
+        total_cost=round(total_cost, 2),
+        delivery_lead_time_days=lead_time_days,
+        message=f"Restocking order {order_number} submitted successfully"
+    )
 
 @app.get("/api/reports/monthly-trends")
 def get_monthly_trends():
